@@ -7,7 +7,12 @@ const server = express();
 
 const cors = require("cors");
 
-server.use(cors());
+server.use(express.json());
+
+server.use(cors({
+    origin: 'http://localhost:3000',
+    credentials: true
+}));
 const mongoose = require("mongoose");
 
 
@@ -20,8 +25,6 @@ mongoose.Promise = global.Promise;
 
 const uri = `${process.env.mongo_db_url}`;
 
-
-
 const mongodb = mongoose.connect(uri).then(()=>{
     console.log("db is connected");
     
@@ -31,6 +34,11 @@ const mongodb = mongoose.connect(uri).then(()=>{
 
 const userRoutes = require("./users/userRoutes");
 server.use('/api/users', userRoutes);
+
+const menuRoutes = require('./menus/menuRoutes');
+const cartRoutes = require('./cart/cartRoutes');
+server.use('/api/menus', menuRoutes);
+server.use('/api/cart', cartRoutes);
 
 
 server.listen(PORT , () =>{
