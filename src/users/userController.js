@@ -11,6 +11,7 @@ const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:3000';
 const RESEND_COOLDOWN_SEC = Number(process.env.VERIFICATION_RESEND_COOLDOWN_SEC || 120);
+const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:5000';
 
 exports.signup = async (req, res) => {
     try {
@@ -48,7 +49,7 @@ exports.signup = async (req, res) => {
 
         await newUser.save();
 
-        const verificationLink = `http://localhost:5000/api/users/verify-email?token=${token}&email=${email}`;
+        const verificationLink = `${BACKEND_URL}/api/users/verify-email?token=${encodeURIComponent(token)}&email=${encodeURIComponent(email)}`;
         await sendVerificationEmail(email, verificationLink);
 
         res.status(200).json({ message: 'Verification email sent. Please check your inbox.' });
@@ -63,16 +64,26 @@ exports.verifyEmail = async (req, res) => {
     try {
         const { token, email } = req.query;
 
+        if (!token || !email) {
+            return res.redirect(302, `${FRONTEND_URL}/auth/login?verified=0&reason=missing_params`);
+        }
+
         const user = await User.findOne({ email, verificationToken: token });
         if (!user) {
-            return res.status(400).json({ message: 'Invalid or expired token' });
+            // If already verified, just let them in with success
+            const maybe = await User.findOne({ email });
+            if (maybe?.isVerified) {
+                return res.redirect(302, `${FRONTEND_URL}/auth/login?verified=1&already=1`);
+            }
+            // Otherwise tell the frontend it’s invalid/expired and pass email for quick resend
+            return res.redirect(302, `${FRONTEND_URL}/auth/login?verified=0&reason=invalid_or_expired&email=${encodeURIComponent(email)}`);
         }
 
         user.isVerified = true;
         user.verificationToken = undefined;
         await user.save();
 
-        res.status(200).json({ message: 'Email verified successfully. You can now login.' });
+        return res.redirect(302, `${FRONTEND_URL}/auth/login?verified=1`);
 
     } catch (err) {
         console.error(err);
@@ -91,9 +102,12 @@ exports.login = async (req, res) => {
         if (!user) return res.status(400).json({ message: 'Invalid email or password' });
 
         // 2. Check if email is verified
-        if (!user.isVerified) {
-            return res.status(403).json({ message: 'Email not verified. Please check your inbox.' });
-        }
+         if (!user.isVerified) {
+              return res.status(403).json({
+                     message: 'Email not verified. Please check your inbox.',
+                     code: 'EMAIL_NOT_VERIFIED'
+               });
+             }
 
         // 3. Compare password
         const isMatch = await bcrypt.compare(password, user.password);
@@ -105,6 +119,12 @@ exports.login = async (req, res) => {
             jwt_secret,
             { expiresIn: '1d' }
         );
+        if (!user.isVerified) {
+            return res.status(403).json({
+                message: 'Please verify your email before logging in.',
+                reason: 'unverified'
+            });
+        }
         // 5. Respond
         res.status(200).json({
             message: 'Login successful',
