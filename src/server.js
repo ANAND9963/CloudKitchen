@@ -40,6 +40,10 @@ const cartRoutes = require('./cart/cartRoutes');
 server.use('/api/menus', menuRoutes);
 server.use('/api/cart', cartRoutes);
 
+const addressRoutes = require('./addresses/addressRoutes');
+server.use('/api', addressRoutes);
+const ordersRoutes = require('./orders/orderRoutes');
+server.use('/api', ordersRoutes);
 
 server.listen(PORT , () =>{
     console.log(`server is running ${PORT}`);
