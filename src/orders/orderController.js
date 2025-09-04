@@ -6,6 +6,9 @@ const DELIVERY_FEE_FLAT = 4.99;
 const SERVICE_FEE_RATE  = 0.05;
 const TAX_RATE          = 0.08;
 const r2 = (n) => Math.round(n * 100) / 100;
+const getUid = (req) => {
+    return String(req?.user?.userId || req?.user?._id || req?.user?.id || '');
+};
 
 exports.checkout = async (req, res) => {
     try {
@@ -142,7 +145,9 @@ exports.checkout = async (req, res) => {
  */
 exports.listOrders = async (req, res) => {
     try {
-        const { role, userId } = req.user;
+        const role = req.user?.role || 'user';
+        const userId = getUid(req);
+
         const query = {};
 
         if (role === 'admin' || role === 'owner') {
@@ -154,6 +159,8 @@ exports.listOrders = async (req, res) => {
                 if (req.query.to)   query.createdAt.$lte = new Date(req.query.to);
             }
         } else {
+            // REGULAR USER → restrict to their own orders
+            if (!userId) return res.status(401).json({ message: 'Unauthorized' });
             query.user = userId;
         }
 
@@ -162,8 +169,10 @@ exports.listOrders = async (req, res) => {
         const skip  = (page - 1) * limit;
 
         const [orders, total] = await Promise.all([
-            (await Order.find(query).sort({ createdAt: -1 }).skip(skip).limit(limit)),
-            Order.countDocuments(query)
+            // if you want placed-by info for admins, you can populate user email here:
+            // Order.find(query).populate('user','email firstName lastName').sort({ createdAt: -1 }).skip(skip).limit(limit),
+            Order.find(query).sort({ createdAt: -1 }).skip(skip).limit(limit),
+            Order.countDocuments(query),
         ]);
 
         res.json({ page, limit, total, orders });
@@ -173,6 +182,7 @@ exports.listOrders = async (req, res) => {
     }
 };
 
+
 /**
  * GET /api/orders/:id
  * - Users: only their own
@@ -180,11 +190,13 @@ exports.listOrders = async (req, res) => {
  */
 exports.getOrder = async (req, res) => {
     try {
+        const userId = getUid(req);
         const order = await Order.findById(req.params.id);
         if (!order) return res.status(404).json({ message: 'Order not found' });
 
-        const isStaff = ['admin','owner'].includes(req.user.role);
-        if (!isStaff && String(order.user) !== String(req.user.userId)) {
+        const isStaff = ['admin','owner'].includes(req.user?.role);
+        const isOwn   = String(order.user) === String(userId);
+        if (!isStaff && !isOwn) {
             return res.status(403).json({ message: 'Not allowed' });
         }
 
@@ -195,6 +207,7 @@ exports.getOrder = async (req, res) => {
     }
 };
 
+
 /**
  * POST /api/orders/:id/cancel
  * - Allowed when status in ['pending','placed','accepted']
@@ -202,11 +215,12 @@ exports.getOrder = async (req, res) => {
  */
 exports.cancelOrder = async (req, res) => {
     try {
+        const userId = getUid(req);
         const order = await Order.findById(req.params.id);
         if (!order) return res.status(404).json({ message: 'Order not found' });
 
-        const isStaff = ['admin','owner'].includes(req.user.role);
-        const isOwn   = String(order.user) === String(req.user.userId);
+        const isStaff = ['admin','owner'].includes(req.user?.role);
+        const isOwn   = String(order.user) === String(userId);
         if (!isOwn && !isStaff) {
             return res.status(403).json({ message: 'Not allowed' });
         }
@@ -224,3 +238,40 @@ exports.cancelOrder = async (req, res) => {
         res.status(500).json({ message: 'Failed to cancel order' });
     }
 };
+
+
+exports.updateStatus = async (req, res) => {
+    try {
+        const { id } = req.params
+        const { to } = req.body || {}
+        const order = await Order.findById(id)
+        if (!order) return res.status(404).json({ message: 'Order not found.' })
+
+        const isStaff = ['admin','owner'].includes(req.user.role)
+        if (!isStaff) return res.status(403).json({ message: 'Not allowed.' })
+
+        const allowed = ['accepted','prepping','ready']
+        if (!allowed.includes(to)) {
+            return res.status(400).json({ message: 'Unsupported status transition.' })
+        }
+
+        // simple forward-only guard
+        const lane = ['pending','placed','accepted','prepping','ready','completed']
+        const fromIdx = lane.indexOf(order.status)
+        const toIdx = lane.indexOf(to)
+        if (toIdx <= fromIdx) {
+            return res.status(400).json({ message: `Cannot move from ${order.status} to ${to}.` })
+        }
+        if (order.status === 'cancelled' || order.status === 'completed') {
+            return res.status(400).json({ message: `Order is ${order.status}.` })
+        }
+
+        order.status = to
+        await order.save()
+        res.json({ message: 'Status updated', order })
+    } catch (err) {
+        console.error('updateStatus error', err)
+        res.status(500).json({ message: 'Failed to update status' })
+    }
+}
+

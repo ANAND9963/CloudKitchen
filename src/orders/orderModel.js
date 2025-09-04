@@ -56,8 +56,11 @@ const OrderSchema = new mongoose.Schema(
 
         paymentMethodId: String,   // stored for later (Stripe/Razorpay), not used yet
         paymentRef: String
+
     },
     { timestamps: true }
+
 );
 
+OrderSchema.index({ user: 1, createdAt: -1 });
 module.exports = mongoose.model('Order', OrderSchema);
